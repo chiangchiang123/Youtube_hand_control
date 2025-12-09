@@ -2,6 +2,11 @@ import cv2
 import mediapipe as mp
 import pyautogui
 import time
+from collections import deque
+from index_direction import handle_index_direction
+from index_play_pause import handle_index_play_pause
+from zoom_inout import handle_zoom
+from fist_speed_control import handle_fist_speed
 
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
@@ -12,32 +17,28 @@ prev_gesture = None
 cooldown = 1.0
 last_time = time.time()
 
-def finger_up(lm, tip, pip):
-    return lm[tip].y < lm[pip].y
+def finger_extended(lm, tip, pip, thresh=0.1):
+    """手指是否伸出，不看方向，只看距離"""
+    # print(lm[tip].x, lm[pip].x, lm[tip].y, lm[pip].y)
+    return abs(lm[tip].x - lm[pip].x) > thresh or abs(lm[tip].y - lm[pip].y) > thresh
 
-def classify_gesture(lm):
+def classify_static_pose(lm):
     up = [
-        finger_up(lm, 4, 3),   # thumb
-        finger_up(lm, 8, 6),   # index
-        finger_up(lm, 12,10),  # middle
-        finger_up(lm, 16,14),  # ring
-        finger_up(lm, 20,18)   # pinky
+        finger_extended(lm, 4, 3),   # thumb
+        finger_extended(lm, 8, 6),   # index
+        finger_extended(lm, 12,10),  # middle
+        finger_extended(lm, 16,14),  # ring
+        finger_extended(lm, 20,18)   # pinky
     ]
     up_count = sum(up)
+    # print("Finger up states:", up)
 
-    # gesture definitions
     if up_count == 0:
-        return "PAUSE"       # ✊
-    if up_count == 5:
-        return "PLAY"        # 🖐
-    if up[1] and not any(up[i] for i in [0,2,3,4]):
-        return "FORWARD"     # 👉
-    if up[0] and not any(up[i] for i in [1,2,3,4]):
-        return "BACK"        # 👈
-    if up[1] and up[2] and not up[0]:
-        return "SPEEDUP"     # ✌
+        return "FIST"
+    if up_count == 1 and up[1]:
+        return "POINT"
     if up[0] and up[1] and not up[2]:
-        return "NORMAL"      # 🤟
+        return "THUMB_INDEX"
     return None
 
 def send_key(action):
@@ -51,7 +52,7 @@ def send_key(action):
     }
     key = keymap.get(action)
     if key:
-        print(f"👉 {action} → 按下 {key}")
+        print(f" {action} → 按下 {key}")
         pyautogui.press(key)
 
 while True:
@@ -66,14 +67,15 @@ while True:
         for hand_landmarks in results.multi_hand_landmarks:
             mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
             lm = hand_landmarks.landmark
-            gesture = classify_gesture(lm)
 
-            # gesture throttle
-            if gesture and (time.time() - last_time > cooldown):
-                if gesture != prev_gesture:
-                    send_key(gesture)
-                    prev_gesture = gesture
-                    last_time = time.time()
+            pose = classify_static_pose(lm)
+            # print("Detected pose:", pose)
+
+            handle_index_direction(lm, pose)
+            handle_index_play_pause(lm)
+            handle_fist_speed(lm)
+            handle_zoom(lm, pose)
+            
 
     cv2.imshow('Gesture Control', frame)
     if cv2.waitKey(5) & 0xFF == 27:
